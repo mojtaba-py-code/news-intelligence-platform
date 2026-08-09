@@ -1,0 +1,198 @@
+# =========================================================================== #
+# Source catalogue
+#
+# Import with:  news-platform sources sync
+#
+# Rules:
+#   * `slug` is the stable identifier used by the CLI and the API.
+#   * `kind` selects the connector: rss | api | scraper | json_feed.
+#   * Credentials are NEVER written here. Reference an environment variable
+#     name via `api_key_env`; the connector resolves it at request time.
+#   * Every URL is validated against the SSRF policy before it is fetched.
+#   * Scraping entries must respect the publisher's terms and robots.txt.
+#     `respect_robots: true` is the default and should stay that way.
+# =========================================================================== #
+
+sources:
+  # ------------------------------------------------------------------ RSS --
+  - slug: bbc-world
+    name: BBC News - World
+    kind: rss
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+    homepage: https://www.bbc.com/news
+    language: en
+    country: GB
+    category: world
+    weight: 1.6
+    request_delay_seconds: 2.0
+    max_articles_per_run: 60
+
+  - slug: bbc-technology
+    name: BBC News - Technology
+    kind: rss
+    url: https://feeds.bbci.co.uk/news/technology/rss.xml
+    language: en
+    country: GB
+    category: technology
+    weight: 1.5
+
+  - slug: reuters-world
+    name: Reuters - World
+    kind: rss
+    url: https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best
+    language: en
+    category: business
+    weight: 1.7
+    request_delay_seconds: 2.0
+
+  - slug: guardian-world
+    name: The Guardian - World
+    kind: rss
+    url: https://www.theguardian.com/world/rss
+    homepage: https://www.theguardian.com
+    language: en
+    country: GB
+    category: world
+    weight: 1.4
+
+  - slug: guardian-technology
+    name: The Guardian - Technology
+    kind: rss
+    url: https://www.theguardian.com/uk/technology/rss
+    language: en
+    country: GB
+    category: technology
+    weight: 1.4
+
+  - slug: techcrunch
+    name: TechCrunch
+    kind: rss
+    url: https://techcrunch.com/feed/
+    homepage: https://techcrunch.com
+    language: en
+    country: US
+    category: technology
+    weight: 1.2
+    config:
+      prefer_content: true
+
+  - slug: ars-technica
+    name: Ars Technica
+    kind: rss
+    url: https://feeds.arstechnica.com/arstechnica/index
+    language: en
+    country: US
+    category: technology
+    weight: 1.3
+
+  - slug: hacker-news-frontpage
+    name: Hacker News - Front page
+    kind: rss
+    url: https://hnrss.org/frontpage
+    language: en
+    category: technology
+    weight: 1.0
+    max_articles_per_run: 40
+
+  - slug: krebs-on-security
+    name: Krebs on Security
+    kind: rss
+    url: https://krebsonsecurity.com/feed/
+    language: en
+    country: US
+    category: cybersecurity
+    weight: 1.5
+
+  - slug: bleeping-computer
+    name: BleepingComputer
+    kind: rss
+    url: https://www.bleepingcomputer.com/feed/
+    language: en
+    category: cybersecurity
+    weight: 1.3
+
+  - slug: cointelegraph
+    name: Cointelegraph
+    kind: rss
+    url: https://cointelegraph.com/rss
+    language: en
+    category: cryptocurrency
+    weight: 1.0
+
+  - slug: nasa-breaking-news
+    name: NASA - Breaking News
+    kind: rss
+    url: https://www.nasa.gov/news-release/feed/
+    language: en
+    country: US
+    category: science
+    weight: 1.4
+
+  # ----------------------------------------------------------------- APIs --
+  # Enabled only when NEWSAPI_KEY is present in the environment.
+  - slug: newsapi-headlines
+    name: NewsAPI - Top headlines
+    kind: api
+    url: https://newsapi.org/v2/top-headlines
+    homepage: https://newsapi.org
+    enabled: false
+    language: en
+    api_key_env: NEWSAPI_KEY
+    weight: 1.1
+    max_articles_per_run: 100
+    config:
+      auth: header
+      auth_header: X-Api-Key
+      pagination: page
+      page_param: page
+      page_size_param: pageSize
+      page_size: 100
+      max_pages: 2
+      params:
+        language: en
+        category: technology
+      mapping:
+        items_path: articles
+        title: title
+        url: url
+        description: description
+        content: content
+        author: author
+        published_at: publishedAt
+        image_url: urlToImage
+        source_name: source.name
+
+  # ------------------------------------------------------------ JSON feed --
+  - slug: daring-fireball
+    name: Daring Fireball
+    kind: json_feed
+    url: https://daringfireball.net/feeds/json
+    enabled: false
+    language: en
+    category: technology
+    weight: 0.9
+
+  # -------------------------------------------------------------- scraper --
+  # Disabled by default: only enable scraping for sites whose terms permit it.
+  - slug: example-scraper
+    name: Example Publisher (scraper template)
+    kind: scraper
+    url: https://example.com/news
+    enabled: false
+    language: en
+    category: general
+    respect_robots: true
+    request_delay_seconds: 3.0
+    max_articles_per_run: 20
+    config:
+      same_domain_only: true
+      concurrency: 2
+      max_pages: 10
+      selectors:
+        article_links: "a.article-link"
+        link_must_contain: ["/news/"]
+        title: "h1.headline"
+        content: "div.article-body"
+        author: "span.byline"
+        published_at: "time[datetime]"
+        image: "figure img"

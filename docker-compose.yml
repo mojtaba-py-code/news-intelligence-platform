@@ -1,0 +1,131 @@
+# =========================================================================== #
+# Development stack:  docker compose up
+#
+#   api        - REST API + dashboard   http://localhost:8000
+#   worker     - background job runner
+#   scheduler  - enqueues recurring jobs
+#   postgres   - primary database
+#   redis      - cache, rate limits
+#
+# Secrets come from the environment (or a local .env). Nothing here contains a
+# real credential; the Postgres password below is a development default and is
+# never reachable from outside the compose network.
+# =========================================================================== #
+
+x-app-env: &app-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  DATABASE_URL: postgresql+asyncpg://newsuser:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/newsdb
+  REDIS_URL: redis://redis:6379/0
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in your .env before starting}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  NEWSAPI_KEY: ${NEWSAPI_KEY:-}
+  SOURCES_CONFIG_PATH: configs/sources.yaml
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8000}
+  TRUSTED_HOSTS: ${TRUSTED_HOSTS:-*}
+
+x-app-base: &app-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: news-intelligence-platform:latest
+  environment: *app-env
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  networks:
+    - newsnet
+
+services:
+  api:
+    <<: *app-base
+    container_name: nip-api
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  migrate:
+    <<: *app-base
+    container_name: nip-migrate
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    restart: "no"
+
+  worker:
+    <<: *app-base
+    container_name: nip-worker
+    command: ["python", "-m", "app.workers.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  scheduler:
+    <<: *app-base
+    container_name: nip-scheduler
+    command: ["python", "-m", "app.workers.scheduler"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: nip-postgres
+    environment:
+      POSTGRES_USER: newsuser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_DB: newsdb
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newsuser -d newsdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published to the host: the database is reachable only inside the
+    # compose network. Uncomment for local psql access during development.
+    # ports:
+    #   - "5432:5432"
+    restart: unless-stopped
+    networks:
+      - newsnet
+
+  redis:
+    image: redis:7-alpine
+    container_name: nip-redis
+    command: ["redis-server", "--save", "60", "1", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - newsnet
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  newsnet:
+    driver: bridge

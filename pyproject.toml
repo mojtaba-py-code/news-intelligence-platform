@@ -1,0 +1,165 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "news-intelligence-platform"
+version = "1.0.0"
+description = "Multi-Source News Intelligence Platform - secure, modular news ingestion, NLP enrichment and analytics"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Mojtaba Karimi" }]
+keywords = ["news", "nlp", "etl", "fastapi", "intelligence", "deduplication"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.34,<1.0",
+    "pydantic>=2.10,<3.0",
+    "pydantic-settings>=2.7,<3.0",
+    "email-validator>=2.2",
+    "SQLAlchemy>=2.0.36,<3.0",
+    "alembic>=1.14",
+    "aiosqlite>=0.20",
+    "httpx>=0.28,<1.0",
+    "beautifulsoup4>=4.12",
+    "defusedxml>=0.7.1",
+    "redis>=5.0",
+    "PyJWT>=2.9",
+    "argon2-cffi>=23.1",
+    "python-multipart>=0.0.9",
+    "Jinja2>=3.1",
+    "typer>=0.15",
+    "rich>=13.9",
+    "PyYAML>=6.0",
+    "numpy>=1.26",
+    "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+postgres = ["asyncpg>=0.30"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "respx>=0.21",
+    "fakeredis>=2.26",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "bandit>=1.8",
+    "types-PyYAML",
+]
+
+[project.scripts]
+news-platform = "app.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/mojtaba-py-code/news-intelligence-platform"
+Issues = "https://github.com/mojtaba-py-code/news-intelligence-platform/issues"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["dashboard/templates/*.html", "dashboard/static/*"]
+
+# --------------------------------------------------------------------------- #
+# Tooling
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",      # pycodestyle / pyflakes
+    "I",                 # isort
+    "N",                 # pep8-naming
+    "UP",                # pyupgrade
+    "B",                 # bugbear
+    "C4",                # comprehensions
+    "SIM",               # simplify
+    "S",                 # bandit-style security rules
+    "T20",               # no print in library code
+    "RUF",
+]
+ignore = [
+    "S101",   # assert is fine in tests (and used for narrowing)
+    "B008",   # FastAPI Depends() in defaults is idiomatic
+    "SIM108", # ternary is not always clearer
+    # PEP 695 generic syntax is not fully supported by Pydantic v2 generic
+    # models and SQLAlchemy's DeclarativeBase; keep the classic TypeVar form.
+    "UP046",
+    "UP047",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately contain fixture credentials, non-ASCII language
+# samples and shared class-level payloads.
+"tests/*" = ["S105", "S106", "S311", "T20", "RUF001", "RUF002", "RUF012"]
+# These two modules exist precisely to normalise "ambiguous" Unicode
+# (smart quotes, dashes, exotic whitespace), so the characters are the point.
+"app/processing/normalization/text.py" = ["RUF001"]
+"app/processing/cleaning/html_clean.py" = ["RUF001"]
+"app/cli.py" = ["T20"]
+"scripts/*" = ["T20"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = []
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+ignore_missing_imports = true
+exclude = ["build/", "dist/", "migrations/"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers"
+markers = [
+    "unit: fast isolated tests",
+    "integration: tests touching database/redis/http layers",
+    "e2e: full pipeline tests",
+]
+filterwarnings = ["ignore::DeprecationWarning:passlib.*"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = ["app/workers/scheduler.py", "app/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@abstractmethod",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", "build", ".venv"]

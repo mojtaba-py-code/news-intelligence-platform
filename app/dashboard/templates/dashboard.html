@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>News Intelligence Platform</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◈</span>
+    <div>
+      <h1>News Intelligence Platform</h1>
+      <p class="muted">v{{ version }} · {{ environment }} · last {{ hours }}h</p>
+    </div>
+  </div>
+  <nav>
+    <a href="/docs">API docs</a>
+    <a href="/api/v1/health">Health</a>
+    <a href="/metrics">Metrics</a>
+    <button id="refresh" type="button">Refresh</button>
+  </nav>
+</header>
+
+<main>
+  <section class="cards" aria-label="Overview">
+    <article class="card">
+      <p class="label">Total articles</p>
+      <p class="value" data-metric="total_articles">{{ overview.total_articles }}</p>
+    </article>
+    <article class="card">
+      <p class="label">Last 24h</p>
+      <p class="value" data-metric="articles_24h">{{ overview.articles_24h }}</p>
+    </article>
+    <article class="card">
+      <p class="label">Active sources</p>
+      <p class="value">{{ overview.active_sources }} <span class="muted">/ {{ overview.total_sources }}</span></p>
+    </article>
+    <article class="card">
+      <p class="label">Detected events</p>
+      <p class="value">{{ overview.detected_events }}</p>
+    </article>
+    <article class="card">
+      <p class="label">Duplicate rate</p>
+      <p class="value">{{ '%.1f' | format(overview.duplicate_rate * 100) }}%</p>
+    </article>
+    <article class="card">
+      <p class="label">Avg relevance</p>
+      <p class="value">{{ '%.2f' | format(overview.avg_relevance) }}</p>
+    </article>
+  </section>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Article volume</h2>
+      {% if timeseries %}
+      <div class="chart" role="img" aria-label="Hourly article volume">
+        {% for point in timeseries %}
+        <div class="bar-wrap" title="{{ point.label }} · {{ point.count }} articles">
+          <div class="bar" style="height: {{ point.height }}%"></div>
+          <span class="bar-label">{{ point.label }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty">No articles in this window yet. Run <code>news-platform ingest --all</code>.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2>Sentiment</h2>
+      {% set total = sentiment.very_negative + sentiment.negative + sentiment.neutral + sentiment.positive + sentiment.very_positive %}
+      {% if total %}
+      <ul class="bars">
+        {% for label, count, cls in [
+            ('Very positive', sentiment.very_positive, 'vpos'),
+            ('Positive', sentiment.positive, 'pos'),
+            ('Neutral', sentiment.neutral, 'neu'),
+            ('Negative', sentiment.negative, 'neg'),
+            ('Very negative', sentiment.very_negative, 'vneg')] %}
+        <li>
+          <span class="bar-name">{{ label }}</span>
+          <span class="track"><span class="fill {{ cls }}" style="width: {{ (100 * count / total) | round(1) }}%"></span></span>
+          <span class="bar-count">{{ count }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="muted">Mean polarity: {{ '%.3f' | format(sentiment.average_score) }}</p>
+      {% else %}
+      <p class="empty">No sentiment data yet.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2>Trending</h2>
+      {% if trends %}
+      <ul class="trends">
+        {% for trend in trends %}
+        <li>
+          <span class="tag">#{{ trend.subject_label }}</span>
+          <span class="growth {{ 'up' if trend.growth_percent >= 0 else 'down' }}">
+            {{ '+' if trend.growth_percent >= 0 else '' }}{{ '%.0f' | format(trend.growth_percent) }}%
+          </span>
+          <span class="muted">{{ trend.current_count }} articles · {{ trend.source_count }} sources</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No trends computed yet. Run <code>news-platform trends</code>.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2>Topics</h2>
+      {% if topics %}
+      <ul class="bars">
+        {% for bucket in topics %}
+        <li>
+          <span class="bar-name">{{ bucket.label }}</span>
+          <span class="track"><span class="fill topic" style="width: {{ bucket.percentage }}%"></span></span>
+          <span class="bar-count">{{ bucket.count }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No classified topics yet.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel wide">
+      <h2>Sources</h2>
+      {% if sources %}
+      <table>
+        <thead>
+          <tr><th>Source</th><th>24h</th><th>Total</th><th>Reliability</th><th>Success rate</th></tr>
+        </thead>
+        <tbody>
+          {% for source in sources %}
+          <tr>
+            <td>{{ source.name }} <span class="muted">{{ source.slug }}</span></td>
+            <td>{{ source.articles_24h }}</td>
+            <td>{{ source.total_articles }}</td>
+            <td>{{ '%.2f' | format(source.reliability_score) }}</td>
+            <td>{{ '%.0f' | format(source.success_rate * 100) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="empty">No sources registered. Run <code>news-platform sources sync</code>.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel wide">
+      <h2>Events</h2>
+      {% if events %}
+      <ul class="events">
+        {% for event in events %}
+        <li>
+          <p class="event-title">{{ event.title }}</p>
+          <p class="muted">
+            {{ event.article_count }} articles · {{ event.source_count }} sources ·
+            importance {{ '%.2f' | format(event.importance) }} ·
+            sentiment {{ '%.2f' | format(event.avg_sentiment) }}
+          </p>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No event clusters yet. Run <code>news-platform events</code>.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel wide">
+      <h2>Latest articles</h2>
+      {% if articles %}
+      <ul class="articles">
+        {% for article in articles %}
+        <li>
+          <a href="{{ article.canonical_url }}" rel="noopener noreferrer nofollow" target="_blank">{{ article.title }}</a>
+          <p class="muted">
+            {{ article.source_name }} ·
+            {{ article.published_at.strftime('%Y-%m-%d %H:%M') }} ·
+            {{ article.sentiment_label }} ({{ '%.2f' | format(article.sentiment_score) }}) ·
+            relevance {{ '%.2f' | format(article.relevance_score) }}
+            {%- if article.category %} · {{ article.category }}{% endif %}
+          </p>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="empty">No articles stored yet.</p>
+      {% endif %}
+    </section>
+  </div>
+</main>
+
+<footer>
+  <p class="muted">
+    Rendered server-side; counters refresh from <code>/api/v1/analytics/overview</code>.
+    No third-party assets are loaded.
+  </p>
+</footer>
+
+<script src="/static/dashboard.js" defer></script>
+</body>
+</html>

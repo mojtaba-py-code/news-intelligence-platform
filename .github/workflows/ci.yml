@@ -1,0 +1,201 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Test-only values; the real ones live in the deployment environment.
+  ENVIRONMENT: test
+  DATABASE_URL: sqlite+aiosqlite:///:memory:
+  JWT_SECRET_KEY: ci-secret-key-not-used-outside-continuous-integration-0123456789
+  CACHE_ENABLED: "false"
+  RATE_LIMIT_ENABLED: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Lint, format and type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff (lint)
+        run: ruff check app tests
+
+      - name: Ruff (format)
+        run: ruff format --check app tests
+
+      - name: MyPy
+        run: mypy app
+
+  security:
+    name: Security checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install pip-audit
+
+      - name: Bandit (static analysis)
+        run: bandit -r app -ll -ii
+
+      - name: pip-audit (dependency CVEs)
+        run: pip-audit --strict --ignore-vuln GHSA-none || pip-audit
+        continue-on-error: true
+
+      - name: Fail on committed secrets
+        run: |
+          if git grep -nEI "(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|sk-[A-Za-z0-9]{32,})" -- . ':!*.lock'; then
+            echo "::error::A credential-shaped string was found in the repository"
+            exit 1
+          fi
+
+      - name: Ensure no .env is committed
+        run: |
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env must never be committed"
+            exit 1
+          fi
+
+  test:
+    name: Tests (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Unit and integration tests
+        run: pytest --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Enforce coverage floor
+        run: coverage report --fail-under=80
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  test-postgres:
+    name: Tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: newsuser
+          POSTGRES_PASSWORD: ci-password
+          POSTGRES_DB: newsdb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U newsuser -d newsdb"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 3s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,postgres]"
+
+      - name: Migrate
+        env:
+          DATABASE_URL: postgresql+asyncpg://newsuser:ci-password@localhost:5432/newsdb
+        run: python -m alembic upgrade head
+
+      - name: Verify the migration matches the models
+        env:
+          DATABASE_URL: postgresql+asyncpg://newsuser:ci-password@localhost:5432/newsdb
+        run: |
+          python -m alembic check
+
+      - name: Integration tests against PostgreSQL
+        env:
+          DATABASE_URL: postgresql+asyncpg://newsuser:ci-password@localhost:5432/newsdb
+          REDIS_URL: redis://localhost:6379/0
+          CACHE_ENABLED: "true"
+        run: pytest tests/integration tests/api -q
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    needs: [quality, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: news-intelligence-platform:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image
+        run: |
+          docker run --rm -d --name nip-ci \
+            -e ENVIRONMENT=development \
+            -e DATABASE_URL=sqlite+aiosqlite:///./data/ci.db \
+            -e JWT_SECRET_KEY=ci-secret-key-not-used-outside-continuous-integration \
+            -p 8000:8000 news-intelligence-platform:ci
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health; then break; fi
+            sleep 2
+          done
+          curl -fsS http://localhost:8000/health | grep -q healthy
+          docker stop nip-ci
