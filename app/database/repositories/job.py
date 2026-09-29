@@ -10,7 +10,7 @@ from sqlalchemy import delete, func, select
 
 from app.core.utils import ensure_utc, utcnow
 from app.database.models.job import Alert, AlertTrigger, JobStatus, JobType, ProcessingJob
-from app.database.repositories.base import BaseRepository
+from app.database.repositories.base import BaseRepository, affected_rows
 
 
 class JobRepository(BaseRepository[ProcessingJob]):
@@ -137,7 +137,7 @@ class JobRepository(BaseRepository[ProcessingJob]):
             .where(ProcessingJob.finished_at < cutoff)
             .where(ProcessingJob.status.in_([str(JobStatus.SUCCEEDED), str(JobStatus.CANCELLED)]))
         )
-        return int(result.rowcount or 0)
+        return affected_rows(result)
 
 
 class AlertRepository(BaseRepository[Alert]):

@@ -297,8 +297,8 @@ def extract_meta(markup: str | None) -> dict[str, str]:
     for tag in soup.find_all("meta"):
         if not isinstance(tag, Tag):
             continue
-        key = (tag.get("property") or tag.get("name") or "").strip().lower()
-        value = (tag.get("content") or "").strip()
+        key = str(tag.get("property") or tag.get("name") or "").strip().lower()
+        value = str(tag.get("content") or "").strip()
         if key and value and key in _WANTED_META:
             meta.setdefault(_WANTED_META[key], value[:2048])
 

@@ -11,7 +11,7 @@ from sqlalchemy import delete, func, select, update
 from app.core.utils import utcnow
 from app.database.models.article import ArticleEntity, ArticleTopic
 from app.database.models.taxonomy import Entity, EntityType, Topic, TrendSnapshot, TrendSubject
-from app.database.repositories.base import BaseRepository
+from app.database.repositories.base import BaseRepository, affected_rows
 from app.intelligence.entities import normalize_entity_name
 
 
@@ -269,7 +269,7 @@ class TrendRepository(BaseRepository[TrendSnapshot]):
         result = await self.session.execute(
             delete(TrendSnapshot).where(TrendSnapshot.window_start < cutoff)
         )
-        return int(result.rowcount or 0)
+        return affected_rows(result)
 
 
 __all__ = ["EntityRepository", "TopicRepository", "TrendRepository"]

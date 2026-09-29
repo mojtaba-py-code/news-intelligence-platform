@@ -9,7 +9,7 @@ from sqlalchemy import Integer, delete, func, select, update
 
 from app.core.utils import clamp, hours_ago, utcnow
 from app.database.models.source import Source, SourceHealth, SourceStatus
-from app.database.repositories.base import BaseRepository
+from app.database.repositories.base import BaseRepository, affected_rows
 
 #: Consecutive failures after which a source is auto-paused.
 FAILURE_PAUSE_THRESHOLD = 10
@@ -173,7 +173,7 @@ class SourceRepository(BaseRepository[Source]):
         result = await self.session.execute(
             delete(SourceHealth).where(SourceHealth.checked_at < cutoff)
         )
-        return int(result.rowcount or 0)
+        return affected_rows(result)
 
 
 __all__ = ["FAILURE_PAUSE_THRESHOLD", "SourceRepository"]

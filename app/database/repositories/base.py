@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 from sqlalchemy import Select, delete, func, select
+from sqlalchemy.engine import CursorResult, Result
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.metrics import db_query_duration_seconds
 from app.database.base import Base
 
 ModelT = TypeVar("ModelT", bound=Base)
+
+
+def affected_rows(result: Result[Any]) -> int:
+    """Number of rows an UPDATE or DELETE matched.
+
+    ``AsyncSession.execute`` is typed to return ``Result``, but for DML the
+    object is a ``CursorResult``, which is the class that carries ``rowcount``.
+    SQLAlchemy 2.1 no longer types ``rowcount`` on ``Result``, so it is read
+    through the concrete class here rather than at every call site.
+    """
+    return int(cast("CursorResult[Any]", result).rowcount or 0)
 
 
 class BaseRepository(Generic[ModelT]):
@@ -84,7 +96,7 @@ class BaseRepository(Generic[ModelT]):
     async def delete_by_id(self, entity_id: int) -> bool:
         statement = delete(self.model).where(self.model.id == entity_id)  # type: ignore[attr-defined]
         result = await self.session.execute(statement)
-        return bool(result.rowcount)
+        return affected_rows(result) > 0
 
     async def commit(self) -> None:
         await self.session.commit()

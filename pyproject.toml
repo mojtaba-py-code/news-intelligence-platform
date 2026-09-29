@@ -24,7 +24,7 @@ dependencies = [
     "pydantic>=2.10,<3.0",
     "pydantic-settings>=2.7,<3.0",
     "email-validator>=2.2",
-    "SQLAlchemy>=2.0.36,<3.0",
+    "SQLAlchemy[asyncio]>=2.0.36,<3.0",
     "alembic>=1.14",
     "aiosqlite>=0.20",
     "httpx>=0.28,<1.0",
@@ -136,6 +136,9 @@ disallow_incomplete_defs = false
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+# The suite imports its own helpers (`tests.conftest`). Bare `pytest` puts the
+# conftest directory on sys.path, not the project root, so make the root explicit.
+pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-q --strict-markers"

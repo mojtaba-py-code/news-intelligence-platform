@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.utils import utcnow
 from app.database.models.event import Event, EventArticle
-from app.database.repositories.base import BaseRepository
+from app.database.repositories.base import BaseRepository, affected_rows
 
 
 class EventRepository(BaseRepository[Event]):
@@ -132,7 +132,7 @@ class EventRepository(BaseRepository[Event]):
     async def prune(self, *, days: int = 60) -> int:
         cutoff = utcnow() - timedelta(days=days)
         result = await self.session.execute(delete(Event).where(Event.last_updated_at < cutoff))
-        return int(result.rowcount or 0)
+        return affected_rows(result)
 
 
 __all__ = ["EventRepository"]

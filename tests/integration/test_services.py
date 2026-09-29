@@ -314,8 +314,9 @@ class TestEventService:
     @pytest.fixture
     async def cross_source_coverage(self, session: AsyncSession) -> None:
         """Three outlets covering one story, plus unrelated coverage."""
-        from app.database.models.source import Source, SourceKind
         from tests.conftest import make_article
+
+        from app.database.models.source import Source, SourceKind
 
         body = (
             "A powerful earthquake struck the coastal region early on Tuesday, collapsing "
