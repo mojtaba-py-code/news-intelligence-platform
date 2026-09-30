@@ -55,13 +55,24 @@ def settings() -> Settings:
 
 @pytest.fixture
 async def engine(settings: Settings) -> AsyncIterator[object]:
-    """Fresh in-memory schema per test."""
+    """A blank schema per test.
+
+    In-memory SQLite gets that for free: the database disappears with the
+    engine. A server database (the PostgreSQL CI job) outlives the test, so its
+    tables are dropped afterwards, otherwise every later test inherits rows and
+    collides on unique keys. Dropping tables is only ever allowed in the TEST
+    environment, so pointing the suite at a real database cannot wipe it.
+    """
     instance = init_engine(settings, force=True)
     async with instance.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     try:
         yield instance
     finally:
+        if not settings.is_sqlite:
+            assert settings.testing, "refusing to drop tables outside ENVIRONMENT=test"
+            async with instance.begin() as connection:
+                await connection.run_sync(Base.metadata.drop_all)
         await dispose_engine()
 
 

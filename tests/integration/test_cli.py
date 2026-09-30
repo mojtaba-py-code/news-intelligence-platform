@@ -6,6 +6,8 @@ import pytest
 from typer.testing import CliRunner
 
 from app.cli import app
+from app.core.config import Settings
+from app.database.session import dispose_engine
 
 pytestmark = pytest.mark.integration
 
@@ -13,9 +15,17 @@ runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)
-def _database(engine: object) -> None:
-    """Commands open their own sessions against the shared test engine."""
-    return None
+async def _database(engine: object, settings: Settings) -> None:
+    """Commands open their own sessions against the shared test engine.
+
+    Every command runs in its own event loop (``asyncio.run``), and asyncpg
+    connections belong to the loop that opened them. Against PostgreSQL the
+    pool this fixture filled on pytest's loop is therefore released first, so
+    the command opens fresh connections on its own loop. In-memory SQLite keeps
+    the pool: releasing it would discard the database.
+    """
+    if not settings.is_sqlite:
+        await dispose_engine()
 
 
 def _recreate_schema() -> None:
