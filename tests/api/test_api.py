@@ -289,6 +289,37 @@ class TestArticlesAPI:
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "not_found"
 
+    async def test_detail_includes_topic_and_entity_links(
+        self, client: AsyncClient, session: AsyncSession, articles: list[Article]
+    ) -> None:
+        """Every enriched article has links; the detail view used to 500 on them."""
+        from app.database.models.article import ArticleEntity, ArticleTopic
+        from app.database.models.taxonomy import Entity, Topic
+
+        topic = Topic(slug="ai", name="Artificial Intelligence", keywords=["ai"])
+        entity = Entity(name="OpenAI", normalized_name="openai", entity_type="ORG")
+        session.add_all([topic, entity])
+        await session.flush()
+        session.add_all(
+            [
+                ArticleTopic(
+                    article_id=articles[0].id, topic_id=topic.id, score=0.9, is_primary=True
+                ),
+                ArticleEntity(
+                    article_id=articles[0].id, entity_id=entity.id, mentions=3, salience=0.7
+                ),
+            ]
+        )
+        await session.commit()
+
+        response = await client.get(f"/api/v1/articles/{articles[0].id}")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["topics"] == [{"slug": "ai", "name": "Artificial Intelligence", "score": 0.9}]
+        assert body["entities"] == [
+            {"name": "OpenAI", "entity_type": "ORG", "salience": 0.7, "mentions": 3}
+        ]
+
     async def test_invalid_path_parameter(self, client: AsyncClient) -> None:
         assert (await client.get("/api/v1/articles/-1")).status_code == 422
         assert (await client.get("/api/v1/articles/abc")).status_code == 422
@@ -570,6 +601,21 @@ class TestDashboard:
         assert response.status_code == 200
         assert "News Intelligence Platform" in response.text
         assert "Content-Security-Policy" in response.headers
+
+    async def test_dashboard_has_no_inline_styles(
+        self, client: AsyncClient, articles: list[Article]
+    ) -> None:
+        """The CSP (style-src 'self') drops inline style="" attributes.
+
+        Bar sizes used to live in them, so every sentiment and topic bar drew
+        at full width and the volume chart was empty. They are data-*
+        attributes now, applied by dashboard.js.
+        """
+        response = await client.get("/")
+        assert "style-src 'self'" in response.headers["Content-Security-Policy"]
+        assert "style=" not in response.text
+        assert "data-width=" in response.text
+        assert "data-height=" in response.text
 
     async def test_article_titles_are_escaped(
         self, client: AsyncClient, session: AsyncSession, source: object

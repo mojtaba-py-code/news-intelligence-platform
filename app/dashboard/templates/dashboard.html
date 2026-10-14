@@ -59,7 +59,7 @@
       <div class="chart" role="img" aria-label="Hourly article volume">
         {% for point in timeseries %}
         <div class="bar-wrap" title="{{ point.label }} · {{ point.count }} articles">
-          <div class="bar" style="height: {{ point.height }}%"></div>
+          <div class="bar" data-height="{{ point.height }}"></div>
           <span class="bar-label">{{ point.label }}</span>
         </div>
         {% endfor %}
@@ -82,7 +82,7 @@
             ('Very negative', sentiment.very_negative, 'vneg')] %}
         <li>
           <span class="bar-name">{{ label }}</span>
-          <span class="track"><span class="fill {{ cls }}" style="width: {{ (100 * count / total) | round(1) }}%"></span></span>
+          <span class="track"><span class="fill {{ cls }}" data-width="{{ (100 * count / total) | round(1) }}"></span></span>
           <span class="bar-count">{{ count }}</span>
         </li>
         {% endfor %}
@@ -119,7 +119,7 @@
         {% for bucket in topics %}
         <li>
           <span class="bar-name">{{ bucket.label }}</span>
-          <span class="track"><span class="fill topic" style="width: {{ bucket.percentage }}%"></span></span>
+          <span class="track"><span class="fill topic" data-width="{{ bucket.percentage }}"></span></span>
           <span class="bar-count">{{ bucket.count }}</span>
         </li>
         {% endfor %}

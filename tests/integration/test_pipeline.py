@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from tests.conftest import make_article
 
 from app.core.config import get_settings
 from app.core.utils import utcnow
@@ -149,6 +150,55 @@ class TestIngestionPipeline:
         assert result.stored == 1
         assert result.duplicates == 1
 
+    async def test_lost_insert_race_costs_one_article_not_the_batch(
+        self,
+        session: AsyncSession,
+        source: Source,
+        prepared: IngestionPipeline,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two feeds carrying the same story are ingested in parallel transactions.
+
+        The duplicate check can pass and the INSERT still hit the unique
+        constraint when the other transaction commits in between. Here the
+        winning row is written directly and the first check is made to miss
+        it, which reproduces that window deterministically. Before the fix the
+        whole source batch was rolled back and the run crashed.
+        """
+        session.add(
+            make_article(
+                source,
+                title="OpenAI unveils breakthrough AI model",
+                url="https://e.com/ai",
+                content=AI_BODY,
+            )
+        )
+        await session.commit()
+
+        real_check = prepared._find_duplicate
+        calls = 0
+
+        async def miss_first_check(normalized: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            return None if calls == 1 else await real_check(normalized)
+
+        monkeypatch.setattr(prepared, "_find_duplicate", miss_first_check)
+        items = [
+            item("OpenAI unveils breakthrough AI model", "https://e.com/ai", AI_BODY),
+            item("Ransomware group exploits zero-day flaw", "https://e.com/cyber", CYBER_BODY),
+        ]
+        result = await prepared.ingest_source(
+            source, connector=StubSource(SourceContext.from_model(source), items)
+        )
+        await session.commit()
+
+        assert result.success
+        assert result.stored == 1
+        assert result.duplicates == 1
+        urls = set((await session.execute(select(Article.canonical_url))).scalars())
+        assert urls == {"https://e.com/ai", "https://e.com/cyber"}
+
     async def test_invalid_articles_are_rejected_not_stored(
         self, session: AsyncSession, source: Source, prepared: IngestionPipeline
     ) -> None:
@@ -186,6 +236,58 @@ class TestIngestionPipeline:
         await session.refresh(source)
         assert source.consecutive_failures == 1
         assert source.last_error is not None
+
+    async def test_crashed_run_is_recorded_against_the_source(
+        self, session: AsyncSession, source: Source, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A crash used to leave no health sample, so the source kept a 100% success rate."""
+        from app.ingestion import pipeline as pipeline_module
+
+        async def explode(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("database went away")
+
+        monkeypatch.setattr(pipeline_module.IngestionPipeline, "ingest_source", explode)
+        result = await pipeline_module._ingest_one(source.id, get_settings())
+
+        assert result.success is False
+        assert result.source == source.slug
+        assert "database went away" in (result.error or "")
+        await session.refresh(source)
+        assert source.consecutive_failures == 1
+        assert source.last_error == "database went away"
+
+    async def test_sqlite_sources_are_ingested_one_at_a_time(
+        self, session: AsyncSession, source: Source, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SQLite has one writer; parallel sources only time out on its lock."""
+        import asyncio
+
+        if not get_settings().is_sqlite:
+            pytest.skip("SQLite-only behaviour; PostgreSQL ingests sources concurrently")
+
+        from app.ingestion import pipeline as pipeline_module
+        from app.schemas.source import IngestionResult
+
+        session.add(
+            Source(slug="second-source", name="Second", kind="rss", url="https://e.org/feed")
+        )
+        await session.commit()
+
+        running = peak = 0
+
+        async def fake_ingest(source_id: int, _config: Any) -> IngestionResult:
+            nonlocal running, peak
+            running += 1
+            peak = max(peak, running)
+            await asyncio.sleep(0.01)
+            running -= 1
+            return IngestionResult(source=str(source_id), success=True)
+
+        monkeypatch.setattr(pipeline_module, "_ingest_one", fake_ingest)
+        results = await pipeline_module.ingest_sources(concurrency=4)
+
+        assert len(results) == 2
+        assert peak == 1
 
     async def test_health_is_recorded_on_success(
         self, session: AsyncSession, source: Source, prepared: IngestionPipeline

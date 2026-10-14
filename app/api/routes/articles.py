@@ -29,15 +29,28 @@ from app.schemas.common import Page, SortOrder
 router = APIRouter(prefix="/articles", tags=["articles"])
 
 
+_LINK_FIELDS = frozenset({"topics", "entities"})
+
+
 def _to_detail(article: object) -> ArticleDetail:
-    """Build the detail view, flattening the topic/entity link rows."""
-    detail = ArticleDetail.model_validate(article)
-    detail.topics = [
+    """Build the detail view, flattening the topic/entity link rows.
+
+    On the ORM model ``topics`` and ``entities`` are association rows
+    (``ArticleTopic`` / ``ArticleEntity``), not ``TopicRef`` / ``EntityRef``
+    shapes, so they are flattened *before* validation. Validating the model
+    directly fails for any article that has links - that is, every enriched one.
+    """
+    fields: dict[str, object] = {
+        name: getattr(article, name)
+        for name in ArticleDetail.model_fields
+        if name not in _LINK_FIELDS and hasattr(article, name)
+    }
+    fields["topics"] = [
         TopicRef(slug=link.topic.slug, name=link.topic.name, score=link.score)
         for link in getattr(article, "topics", [])
         if link.topic is not None
     ]
-    detail.entities = [
+    fields["entities"] = [
         EntityRef(
             name=link.entity.name,
             entity_type=link.entity.entity_type,
@@ -47,7 +60,7 @@ def _to_detail(article: object) -> ArticleDetail:
         for link in getattr(article, "entities", [])
         if link.entity is not None
     ]
-    return detail
+    return ArticleDetail.model_validate(fields)
 
 
 @router.get("", response_model=Page[ArticleRead], summary="List articles")

@@ -8,6 +8,7 @@ a placeholder secret, a wildcard host list, or SSRF protection disabled.
 
 from __future__ import annotations
 
+import json
 import secrets
 from enum import StrEnum
 from functools import lru_cache
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -38,15 +39,25 @@ class Environment(StrEnum):
 
 
 def _split_csv(value: Any) -> Any:
-    """Accept ``a,b,c`` strings for list-typed settings (env vars are strings)."""
+    """Accept ``a,b,c`` (or a JSON list) for list-typed settings.
+
+    The list fields below are annotated ``NoDecode``, so environment and
+    ``.env`` values reach this validator as the raw string instead of being
+    JSON-decoded first - without it ``CORS_ORIGINS=a,b`` fails before this
+    function ever runs.
+    """
     if isinstance(value, str):
         stripped = value.strip()
         if not stripped:
             return []
-        if stripped.startswith("["):  # already JSON
-            return value
+        if stripped.startswith("["):
+            return json.loads(stripped)
         return [item.strip() for item in stripped.split(",") if item.strip()]
     return value
+
+
+#: A list setting read from the environment as ``a,b,c`` (or a JSON list).
+CsvList = Annotated[list[str], NoDecode]
 
 
 class Settings(BaseSettings):
@@ -89,8 +100,8 @@ class Settings(BaseSettings):
     max_failed_logins: Annotated[int, Field(ge=1, le=100)] = 5
     lockout_minutes: Annotated[int, Field(ge=1, le=1440)] = 15
 
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:8000"])
-    trusted_hosts: list[str] = Field(default_factory=lambda: ["*"])
+    cors_origins: CsvList = Field(default_factory=lambda: ["http://localhost:8000"])
+    trusted_hosts: CsvList = Field(default_factory=lambda: ["*"])
     max_request_bytes: Annotated[int, Field(ge=1024, le=104_857_600)] = 1_048_576
     secure_headers_enabled: bool = True
     hsts_enabled: bool = False
@@ -116,8 +127,8 @@ class Settings(BaseSettings):
     default_request_delay_seconds: Annotated[float, Field(ge=0, le=60)] = 1.0
 
     ssrf_protection_enabled: bool = True
-    allowed_url_schemes: list[str] = Field(default_factory=lambda: ["http", "https"])
-    source_host_allowlist: list[str] = Field(default_factory=list)
+    allowed_url_schemes: CsvList = Field(default_factory=lambda: ["http", "https"])
+    source_host_allowlist: CsvList = Field(default_factory=list)
 
     # ---------------------------------------------------------------- sources
     newsapi_key: SecretStr | None = None

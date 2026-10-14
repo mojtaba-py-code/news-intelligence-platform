@@ -8,7 +8,7 @@ import logging
 import pytest
 
 from app.core.cache import InMemoryCache, NullCache, make_key
-from app.core.config import PLACEHOLDER_SECRET, Environment, Settings
+from app.core.config import PLACEHOLDER_SECRET, PROJECT_ROOT, Environment, Settings
 from app.core.errors import CircuitOpenError, NotFoundError, PlatformError, RateLimitError
 from app.core.logging import (
     REDACTED,
@@ -46,6 +46,27 @@ class TestSettings:
     def test_csv_lists_are_parsed(self) -> None:
         config = Settings(cors_origins="https://a.example, https://b.example")  # type: ignore[arg-type]
         assert config.cors_origins == ["https://a.example", "https://b.example"]
+
+    def test_csv_lists_are_parsed_from_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The constructor path above never touches the env decoder; this does.
+        monkeypatch.setenv("CORS_ORIGINS", "https://a.example, https://b.example")
+        monkeypatch.setenv("TRUSTED_HOSTS", '["api.example", "www.example"]')
+        monkeypatch.setenv("SOURCE_HOST_ALLOWLIST", "")
+        config = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert config.cors_origins == ["https://a.example", "https://b.example"]
+        assert config.trusted_hosts == ["api.example", "www.example"]
+        assert config.source_host_allowlist == []
+
+    def test_env_example_file_loads(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The README's quick start is `cp .env.example .env`, so the shipped
+        # example must parse as-is.
+        for name in ("CORS_ORIGINS", "TRUSTED_HOSTS", "ALLOWED_URL_SCHEMES"):
+            monkeypatch.delenv(name, raising=False)
+        config = Settings(_env_file=PROJECT_ROOT / ".env.example")  # type: ignore[call-arg]
+        assert config.cors_origins == ["http://localhost:3000", "http://localhost:8000"]
+        assert config.allowed_url_schemes == ["http", "https"]
 
     def test_invalid_scheme_rejected(self) -> None:
         with pytest.raises(ValueError, match="scheme"):
