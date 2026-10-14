@@ -36,10 +36,13 @@ sources:
     category: technology
     weight: 1.5
 
+  # Disabled: the feed redirects to reutersagency.com and returns 404 (checked
+  # 2026-10-14). Re-enable once Reuters publishes a working feed URL again.
   - slug: reuters-world
     name: Reuters - World
     kind: rss
     url: https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best
+    enabled: false
     language: en
     category: business
     weight: 1.7
