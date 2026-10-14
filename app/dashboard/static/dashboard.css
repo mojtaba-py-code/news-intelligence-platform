@@ -111,7 +111,8 @@ code { background: var(--panel-alt); padding: .1rem .35rem; border-radius: 4px; 
 .bar-name { font-size: .82rem; color: var(--muted); }
 .bar-count { font-size: .8rem; text-align: right; }
 .track { background: var(--panel-alt); height: 9px; border-radius: 5px; overflow: hidden; }
-.fill { display: block; height: 100%; border-radius: 5px; }
+/* Sized by dashboard.js from data-width; 0 until then, never a misleading full bar. */
+.fill { display: block; width: 0; height: 100%; border-radius: 5px; }
 .fill.vpos { background: var(--vpos); }
 .fill.pos { background: var(--pos); }
 .fill.neu { background: var(--neu); }

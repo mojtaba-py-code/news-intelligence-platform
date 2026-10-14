@@ -26,6 +26,27 @@ def affected_rows(result: Result[Any]) -> int:
     return int(cast("CursorResult[Any]", result).rowcount or 0)
 
 
+def insert_ignoring_conflicts(session: AsyncSession, model: type[Base]) -> Any:
+    """``INSERT ... ON CONFLICT DO NOTHING`` for the session's database.
+
+    Sources are ingested concurrently, one transaction each, so two of them
+    can insert the same article, author or entity at the same moment. Letting
+    the database skip the loser avoids an ``IntegrityError``, which would
+    otherwise poison the whole transaction and lose the source's batch.
+    SQLite and PostgreSQL are the two supported backends.
+    """
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        return pg_insert(model).on_conflict_do_nothing()
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+        return sqlite_insert(model).on_conflict_do_nothing()
+    raise NotImplementedError(f"no conflict-free insert for the {dialect!r} dialect")
+
+
 class BaseRepository(Generic[ModelT]):
     """CRUD helpers shared by every repository.
 

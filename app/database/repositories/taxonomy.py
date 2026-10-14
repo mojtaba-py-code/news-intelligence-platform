@@ -11,7 +11,11 @@ from sqlalchemy import delete, func, select, update
 from app.core.utils import utcnow
 from app.database.models.article import ArticleEntity, ArticleTopic
 from app.database.models.taxonomy import Entity, EntityType, Topic, TrendSnapshot, TrendSubject
-from app.database.repositories.base import BaseRepository, affected_rows
+from app.database.repositories.base import (
+    BaseRepository,
+    affected_rows,
+    insert_ignoring_conflicts,
+)
 from app.intelligence.entities import normalize_entity_name
 
 
@@ -124,26 +128,37 @@ class EntityRepository(BaseRepository[Entity]):
 
         normalized_names = list({key.split("|")[0] for key in wanted})
         statement = select(Entity).where(Entity.normalized_name.in_(normalized_names))
-        found = {
-            f"{entity.normalized_name}|{entity.entity_type}": entity
-            for entity in (await self.session.execute(statement)).scalars().all()
-        }
+
+        async def load() -> dict[str, Entity]:
+            return {
+                f"{entity.normalized_name}|{entity.entity_type}": entity
+                for entity in (await self.session.execute(statement)).scalars().all()
+            }
+
+        found = await load()
+        missing = [
+            {
+                "name": name[:200],
+                "normalized_name": key.split("|")[0][:200],
+                "entity_type": str(entity_type),
+                "first_seen_at": now,
+                "last_seen_at": now,
+            }
+            for key, (name, entity_type) in wanted.items()
+            if key not in found
+        ]
+        if missing:
+            # Insert-or-skip, then re-read: a concurrent ingest may be adding
+            # the same entity, and a plain INSERT would raise IntegrityError.
+            await self.session.execute(insert_ignoring_conflicts(self.session, Entity), missing)
+            found = await load()
 
         resolved: dict[str, Entity] = {}
-        for key, (name, entity_type) in wanted.items():
+        for key in wanted:
             entity = found.get(key)
-            if entity is None:
-                entity = Entity(
-                    name=name[:200],
-                    normalized_name=key.split("|")[0][:200],
-                    entity_type=str(entity_type),
-                    first_seen_at=now,
-                    last_seen_at=now,
-                )
-                self.session.add(entity)
-                found[key] = entity
-            else:
-                entity.last_seen_at = now
+            if entity is None:  # pragma: no cover - inserted or already present
+                continue
+            entity.last_seen_at = now
             resolved[key] = entity
 
         await self.flush()

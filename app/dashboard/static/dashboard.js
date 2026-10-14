@@ -40,6 +40,27 @@
       });
   }
 
+  // Bar sizes arrive as data-* attributes: the CSP (style-src 'self') blocks
+  // inline style="" attributes, but sizing through the CSSOM is allowed.
+  function percent(raw) {
+    var value = parseFloat(raw);
+    if (!isFinite(value)) {
+      return 0;
+    }
+    return Math.min(100, Math.max(0, value));
+  }
+
+  function applySizes() {
+    document.querySelectorAll("[data-width]").forEach(function (node) {
+      node.style.width = percent(node.getAttribute("data-width")) + "%";
+    });
+    document.querySelectorAll("[data-height]").forEach(function (node) {
+      node.style.height = percent(node.getAttribute("data-height")) + "%";
+    });
+  }
+
+  applySizes();
+
   var button = document.getElementById("refresh");
   if (button) {
     button.addEventListener("click", function () {

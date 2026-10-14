@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
@@ -43,6 +42,7 @@ from app.database.models.article import (
 )
 from app.database.models.source import Source
 from app.database.repositories.article import ArticleRepository
+from app.database.repositories.base import insert_ignoring_conflicts
 from app.database.repositories.source import SourceRepository
 from app.database.repositories.taxonomy import EntityRepository, TopicRepository
 from app.database.session import session_scope
@@ -254,7 +254,12 @@ class IngestionPipeline:
             )
 
         article = await self._persist(normalized, source, enrichment)
-        return article is not None
+        if article is None:
+            # A concurrent ingest (another feed carrying the same story) won.
+            stats.duplicates += 1
+            self._quality.record_duplicate()
+            return False
+        return True
 
     async def _find_duplicate(self, normalized: NormalizedArticle) -> DuplicateMatch | None:
         """In-memory check first, then an authoritative database lookup."""
@@ -283,7 +288,12 @@ class IngestionPipeline:
     async def _persist(
         self, normalized: NormalizedArticle, source: Source, enrichment: EnrichmentResult
     ) -> Article | None:
-        """Write the article and its topic/entity links in one transaction."""
+        """Write the article and its topic/entity links in one transaction.
+
+        Returns ``None`` when a concurrent ingest stored the same article first
+        (two feeds carrying one story): the insert is skipped by the database
+        rather than raising, so the rest of this source's batch is unaffected.
+        """
         author = await self._resolve_author(normalized.author_name)
         relevance = self.scorer.score(
             published_at=normalized.published_at,
@@ -297,48 +307,49 @@ class IngestionPipeline:
             profile=InterestProfile(),
         )
 
-        article = Article(
-            source_id=source.id,
-            source_name=source.name,
-            external_id=normalized.external_id,
-            author_id=author.id if author else None,
-            author_name=normalized.author_name,
-            title=normalized.title,
-            description=normalized.description,
-            content=normalized.content,
-            summary=enrichment.summary,
-            url=normalized.url,
-            canonical_url=normalized.canonical_url,
-            image_url=normalized.image_url,
-            published_at=normalized.published_at,
-            source_updated_at=normalized.source_updated_at,
-            language=enrichment.language or normalized.language,
-            country=normalized.country,
-            category=normalized.category or enrichment.primary_topic,
-            content_hash=normalized.content_hash,
-            title_hash=normalized.title_hash,
-            simhash=normalized.simhash,
-            sentiment_score=enrichment.sentiment_score,
-            sentiment_label=str(enrichment.sentiment_label),
-            sentiment_confidence=enrichment.sentiment_confidence,
-            relevance_score=relevance.score,
-            quality_score=normalized.quality_score,
-            readability_score=enrichment.readability,
-            keywords=enrichment.keyword_strings,
-            enrichment=enrichment.metadata(),
-            word_count=enrichment.word_count or normalized.word_count,
-            status=str(ProcessingStatus.PROCESSED),
-            processed_at=utcnow(),
+        values: dict[str, Any] = {
+            "source_id": source.id,
+            "source_name": source.name,
+            "external_id": normalized.external_id,
+            "author_id": author.id if author else None,
+            "author_name": normalized.author_name,
+            "title": normalized.title,
+            "description": normalized.description,
+            "content": normalized.content,
+            "summary": enrichment.summary,
+            "url": normalized.url,
+            "canonical_url": normalized.canonical_url,
+            "image_url": normalized.image_url,
+            "published_at": normalized.published_at,
+            "source_updated_at": normalized.source_updated_at,
+            "language": enrichment.language or normalized.language,
+            "country": normalized.country,
+            "category": normalized.category or enrichment.primary_topic,
+            "content_hash": normalized.content_hash,
+            "title_hash": normalized.title_hash,
+            "simhash": normalized.simhash,
+            "sentiment_score": enrichment.sentiment_score,
+            "sentiment_label": str(enrichment.sentiment_label),
+            "sentiment_confidence": enrichment.sentiment_confidence,
+            "relevance_score": relevance.score,
+            "quality_score": normalized.quality_score,
+            "readability_score": enrichment.readability,
+            "keywords": enrichment.keyword_strings,
+            "enrichment": enrichment.metadata(),
+            "word_count": enrichment.word_count or normalized.word_count,
+            "status": str(ProcessingStatus.PROCESSED),
+            "processed_at": utcnow(),
+        }
+        # The unique constraints on canonical_url and content_hash are the
+        # final arbiter; losing that race to another source is normal.
+        article_id = await self.session.scalar(
+            insert_ignoring_conflicts(self.session, Article).values(**values).returning(Article.id)
         )
-
-        self.session.add(article)
-        try:
-            await self.session.flush()
-        except IntegrityError:
-            # A concurrent worker inserted the same article first. The unique
-            # constraint is the final arbiter, and losing this race is normal.
-            await self.session.rollback()
-            logger.debug("duplicate_insert_rejected", extra={"source": source.slug})
+        if article_id is None:
+            logger.debug("duplicate_insert_skipped", extra={"source": source.slug})
+            return None
+        article = await self.session.get(Article, article_id)
+        if article is None:  # pragma: no cover - the row was just inserted
             return None
 
         await self._link_topics(article, enrichment)
@@ -361,13 +372,18 @@ class IngestionPipeline:
         key = author_key(name)
         if not key:
             return None
-        author = await self.session.scalar(
-            select(Author).where(Author.normalized_name == key).limit(1)
-        )
+        statement = select(Author).where(Author.normalized_name == key).limit(1)
+        author = await self.session.scalar(statement)
         if author is None:
-            author = Author(name=name[:200], normalized_name=key[:200], article_count=0)
-            self.session.add(author)
-            await self.session.flush()
+            # Insert-or-skip: a concurrent ingest may be adding the same author.
+            await self.session.execute(
+                insert_ignoring_conflicts(self.session, Author).values(
+                    name=name[:200], normalized_name=key[:200], article_count=0
+                )
+            )
+            author = await self.session.scalar(statement)
+            if author is None:  # pragma: no cover - inserted or already present
+                return None
         author.article_count += 1
         return author
 
@@ -434,6 +450,11 @@ async def ingest_sources(
     """
     config = config or get_settings()
     limit = max(1, concurrency or config.worker_concurrency)
+    if config.is_sqlite:
+        # SQLite has a single writer. Each source holds its write lock while
+        # it enriches articles, so parallel sources only queue behind it and
+        # time out ("database is locked"); run them one at a time instead.
+        limit = 1
 
     async with session_scope() as session:
         repository = SourceRepository(session)
@@ -488,9 +509,36 @@ async def _ingest_one(source_id: int, config: Settings) -> IngestionResult:
         return IngestionResult(source=str(source_id), success=False, error=exc.message)
     except Exception as exc:
         logger.exception("source_ingest_crashed", extra={"source_id": source_id})
+        slug = await _record_crash(source_id, exc)
         return IngestionResult(
-            source=str(source_id), success=False, error=f"{exc.__class__.__name__}: {exc}"[:300]
+            source=slug or str(source_id),
+            success=False,
+            error=f"{exc.__class__.__name__}: {exc}"[:300],
         )
+
+
+async def _record_crash(source_id: int, exc: Exception) -> str | None:
+    """Best effort: record a crashed run in the source's health history.
+
+    The crashed transaction is gone, so this uses a fresh one. Without it a
+    source that crashes every run would still report a 100% success rate.
+    """
+    try:
+        async with session_scope() as session:
+            repository = SourceRepository(session)
+            source = await repository.get(source_id)
+            if source is None:
+                return None
+            await repository.record_run(
+                source,
+                success=False,
+                error_type=exc.__class__.__name__,
+                error_message=str(exc),
+            )
+            return source.slug
+    except Exception:
+        logger.warning("source_crash_not_recorded", extra={"source_id": source_id})
+        return None
 
 
 __all__ = ["IngestionPipeline", "PipelineStats", "ingest_sources"]
